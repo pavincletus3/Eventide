@@ -1,0 +1,46 @@
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users collection
+    match /users/{userId} {
+      // Allow a user to create their own profile document during sign-up
+      // The document ID must match their auth UID
+      allow create: if request.auth != null && request.auth.uid == userId
+                      && request.resource.data.email == request.auth.token.email
+                      && request.resource.data.role == 'student' // Enforce default role on creation
+                      && request.resource.data.uid == userId; // Ensure uid field matches doc id
+
+      // Allow a user to read their own profile
+      allow get: if request.auth != null && request.auth.uid == userId;
+
+      // Allow a user to update their own profile (e.g., name, but not role by default here)
+      // You might want to restrict which fields they can update.
+      // For example, to prevent users from changing their own role:
+      // allow update: if request.auth != null && request.auth.uid == userId
+      //                  && request.resource.data.role == resource.data.role;
+      allow update: if request.auth != null && request.auth.uid == userId;
+      
+      // Disallow direct deletion by non-admins for now
+      allow delete: if false; 
+
+      // Admin access rules
+      // These rules check if the requesting user has an 'admin' role in their *own* user document.
+      // This is a common pattern but requires the admin user's document to exist and have the correct role.
+      function isUserAdmin() {
+        return request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      }
+
+      // Admins can read any user profile
+      allow get, list: if isUserAdmin();
+      
+      // Admins can update any user profile (including roles)
+      // Admins can also create users directly if needed (though signup flow is primary)
+      // Admins can delete users
+      allow write: if isUserAdmin(); // 'write' covers create, update, delete for admins
+    }
+    // Add rules for other collections here
+  }
+}

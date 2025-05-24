@@ -3,17 +3,20 @@
 
 import type { User } from 'firebase/auth';
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { auth } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase'; // Import db from firebase
 import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
 } from 'firebase/auth';
+import { doc, setDoc, serverTimestamp } from "firebase/firestore"; // Firestore imports
+import type { UserProfile } from '@/types/user';
+
 
 interface AuthContextType {
   user: User | null;
-  loading: boolean;
+  loading: boolean; // For async operations like login/signup/logout
   initialLoading: boolean; // For the very first auth state check
   signIn: (email: string, pass: string) => Promise<void>;
   signUp: (email: string, pass: string) => Promise<void>;
@@ -24,8 +27,8 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(false); // For async operations like login/signup
-  const [initialLoading, setInitialLoading] = useState(true); // For onAuthStateChanged initial check
+  const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -49,7 +52,24 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const signUp = async (email: string, pass: string) => {
     setLoading(true);
     try {
-      await createUserWithEmailAndPassword(auth, email, pass);
+      const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
+      const firebaseUser = userCredential.user;
+
+      if (firebaseUser) {
+        // Create user profile in Firestore
+        const userProfile: Omit<UserProfile, 'createdAt' | 'updatedAt' | 'uid'> & { uid?: string} = { // UID is doc ID
+          email: firebaseUser.email,
+          role: "student", // Default role
+          // name can be added later through profile update
+        };
+
+        await setDoc(doc(db, "users", firebaseUser.uid), {
+          ...userProfile,
+          uid: firebaseUser.uid, // Storing uid also in the document for convenience
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
     } catch (error) {
       setLoading(false);
       throw error;
