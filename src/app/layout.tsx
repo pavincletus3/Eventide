@@ -19,6 +19,12 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: 'Eventide',
   description: 'Your Premier Event Management Platform',
+  manifest: '/manifest.json',
+  themeColor: '#64B5F6',
+  icons: {
+    icon: '/icons/icon-192x192.png', // General purpose icon / favicon
+    apple: '/icons/icon-192x192.png', // For apple-touch-icon
+  },
 };
 
 export default function RootLayout({
