@@ -30,7 +30,7 @@ export default function HomePage() {
           <Link href="/#explore">Explore Events</Link>
         </Button>
         <Button asChild variant="outline" size="lg">
-          <Link href="/#create">Create an Event</Link>
+          <Link href="/events/create">Create an Event</Link>
         </Button>
       </div>
 
