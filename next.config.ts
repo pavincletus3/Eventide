@@ -1,3 +1,4 @@
+
 import type {NextConfig} from 'next';
 import pwa from 'next-pwa';
 
@@ -23,6 +24,12 @@ const nextConfig: NextConfig = {
         hostname: 'placehold.co',
         port: '',
         pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'firebasestorage.googleapis.com',
+        port: '',
+        pathname: '/v0/b/**', // Allows images from any bucket under this host
       },
     ],
   },
