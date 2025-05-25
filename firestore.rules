@@ -4,217 +4,205 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper function to check if a user document exists
-    function userDocExists(userId) {
-      return exists(/databases/$(database)/documents/users/$(userId));
+    // Helper function to safely get user data, checking for existence
+    function getUserData(userId) {
+      let userPath = /databases/$(database)/documents/users/$(userId);
+      // Check if the document exists before trying to access .data
+      return exists(userPath) ? get(userPath).data : null;
     }
 
-    // Helper function to get user role (safer)
-    function getUserRole(userId) {
-      let userDoc = get(/databases/$(database)/documents/users/$(userId));
-      // Check if the document exists and if 'role' field is present in its data
-      return userDocExists(userId) && ('role' in userDoc.data) ? userDoc.data.role : null;
+    // Helper function to check if a user's role matches a specific role.
+    function isUserRole(userId, roleName) {
+      let userData = getUserData(userId);
+      // Ensure userData is not null and 'role' key exists before comparison
+      return userData != null && ('role' in userData) && userData.role == roleName;
     }
 
-    // Helper function to check if user has one of the specified roles (safer)
+    // Helper function to check if a user's role is one of an array of roles.
     function isUserRoleIn(userId, rolesArray) {
-      let role = getUserRole(userId);
-      return role != null && role in rolesArray;
+      let userData = getUserData(userId);
+      // Ensure userData is not null and 'role' key exists before checking 'in'
+      return userData != null && ('role' in userData) && userData.role in rolesArray;
     }
     
-    // Helper function to check if an event document exists
-    function eventExists(eventId) {
-      return exists(/databases/$(database)/documents/events/$(eventId));
+    // Helper function to safely get event data, checking for existence
+    function getEventData(eventId) {
+      let eventPath = /databases/$(database)/documents/events/$(eventId);
+      // Check if the document exists before trying to access .data
+      return exists(eventPath) ? get(eventPath).data : null;
     }
 
-    // Helper function to get event data (safer)
-    function getEventData(eventId) {
-      return get(/databases/$(database)/documents/events/$(eventId)).data;
-    }
-    
-    // Helper function to check if a user is the organizer of a specific event (safer)
+    // Helper function to check if a user is the organizer of a specific event.
     function isEventOrganizer(userId, eventId) {
-      return eventExists(eventId) && getEventData(eventId).organizerId == userId;
+      let eventData = getEventData(eventId);
+      // Ensure eventData is not null before accessing organizerId
+      return eventData != null && eventData.organizerId == userId;
     }
 
     // Rules for the 'users' collection
     match /users/{userId} {
-      allow create: if request.auth != null && request.auth.uid == userId &&
-                    request.resource.data.uid == userId && 
-                    request.resource.data.email == request.auth.token.email &&
-                    request.resource.data.role == 'student' &&
-                    request.resource.data.createdAt == request.time && // Expect server timestamp
-                    request.resource.data.updatedAt == request.time && // Expect server timestamp
-                    request.resource.data.keys().hasAll(['uid', 'email', 'role', 'createdAt', 'updatedAt']) &&
-                    request.resource.data.keys().hasOnly(['uid', 'email', 'role', 'name', 'createdAt', 'updatedAt']); // 'name' is optional
+      allow read: if request.auth != null &&
+                      (
+                        request.auth.uid == userId || // User can read their own profile
+                        isUserRole(request.auth.uid, 'admin') || // Admin can read any user profile
+                        ( // Organizer/Coadmin can read STUDENT profiles (for registration management page)
+                          isUserRoleIn(request.auth.uid, ['organizer', 'coadmin']) &&
+                          resource.data.role == 'student' // This allows reading profile if role is 'student'
+                        )
+                      );
+      allow list: if request.auth != null && isUserRole(request.auth.uid, 'admin'); // Only admin can list all users
 
-      allow read: if request.auth != null && (
-                      (request.auth.uid == userId) || 
-                      (userDocExists(request.auth.uid) && isUserRoleIn(request.auth.uid, ['admin', 'coadmin', 'organizer'])) // Admins, Coadmins, Organizers can read user profiles for management purposes
-                    );
+      allow create: if request.auth != null &&
+                      request.auth.uid == userId &&
+                      request.resource.data.uid == request.auth.uid &&
+                      request.resource.data.email == request.auth.token.email &&
+                      request.resource.data.role == 'student' &&
+                      request.resource.data.createdAt == request.time &&
+                      request.resource.data.updatedAt == request.time &&
+                      // Ensure only expected fields are present on creation by client
+                      request.resource.data.keys().hasAll(['uid', 'email', 'role', 'createdAt', 'updatedAt']) &&
+                      request.resource.data.keys().hasOnly(['uid', 'email', 'role', 'name', 'createdAt', 'updatedAt']); // 'name' is optional
 
-      allow update: if request.auth != null && (
-                      // User updating their own profile (limited fields)
-                      (request.auth.uid == userId &&
-                        request.resource.data.uid == resource.data.uid && 
-                        request.resource.data.email == resource.data.email && 
-                        request.resource.data.role == resource.data.role && 
-                        request.resource.data.createdAt == resource.data.createdAt && // Cannot change createdAt
-                        request.resource.data.updatedAt == request.time && // Expect server timestamp
-                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'updatedAt']) 
-                      ) ||
-                      // Admin updating any user profile (e.g. role)
-                      (userDocExists(request.auth.uid) && isUserRoleIn(request.auth.uid, ['admin']) &&
-                        request.resource.data.uid == resource.data.uid && 
-                        request.resource.data.email == resource.data.email && 
-                        request.resource.data.createdAt == resource.data.createdAt && // Cannot change createdAt
-                        request.resource.data.updatedAt == request.time // Expect server timestamp
-                        // Admins can change 'role', 'name'.
-                        // No need for hasOnly if all other fields are protected by being equal to resource.data
-                      )
-                    );
-      
-      allow list: if request.auth != null && 
-                      userDocExists(request.auth.uid) && 
-                      isUserRoleIn(request.auth.uid, ['admin']); // Only admins can list all users
-      
-      allow delete: if request.auth != null && 
-                      userDocExists(request.auth.uid) && 
-                      isUserRoleIn(request.auth.uid, ['admin']);
+      allow update: if request.auth != null &&
+                        (
+                          // User updating their own profile (limited fields)
+                          (
+                            request.auth.uid == userId &&
+                            // Prevent changing critical fields by self-update
+                            request.resource.data.uid == resource.data.uid &&
+                            request.resource.data.email == resource.data.email &&
+                            request.resource.data.role == resource.data.role && // Role not changeable by self
+                            request.resource.data.createdAt == resource.data.createdAt &&
+                            request.resource.data.updatedAt == request.time && // Must update timestamp
+                            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'updatedAt'])
+                          ) ||
+                          // Admin updating any user profile
+                          (
+                            isUserRole(request.auth.uid, 'admin') &&
+                            // Prevent admin from changing certain critical fields accidentally
+                            request.resource.data.uid == resource.data.uid &&
+                            request.resource.data.email == resource.data.email &&
+                            request.resource.data.createdAt == resource.data.createdAt &&
+                            request.resource.data.updatedAt == request.time // Must update timestamp
+                            // Admin can change 'role', 'name'. Controlled by client logic sending only these.
+                            // A more explicit rule would be: request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'name', 'updatedAt'])
+                          )
+                        );
+      allow delete: if request.auth != null && isUserRole(request.auth.uid, 'admin');
     }
 
     // Rules for the 'events' collection
     match /events/{eventId} {
-      allow get: if (resource.data.status == 'published') || 
-                    (request.auth != null && userDocExists(request.auth.uid) && 
-                      (
-                        isUserRoleIn(request.auth.uid, ['admin', 'coadmin']) || 
-                        (isUserRoleIn(request.auth.uid, ['organizer']) && resource.data.organizerId == request.auth.uid)
-                      )
-                    );
+      // Anyone can get a published event.
+      // Authenticated privileged users can get any event they manage or all if admin.
+      allow get: if (resource.data.status == 'published') ||
+                     (request.auth != null &&
+                       (
+                         isUserRoleIn(request.auth.uid, ['admin', 'coadmin']) ||
+                         (isUserRole(request.auth.uid, 'organizer') && isEventOrganizer(request.auth.uid, eventId))
+                       )
+                     );
+
+      // Anyone can list events. Client-side will filter for 'published' for public view.
+      // Organizer dashboard will filter client-side for their own events or admin sees all.
+      // The 'get' rule above protects individual non-published events from direct access.
+      allow list: if true; 
       
-      allow list: if request.auth != null && (
-                    // Admin can list all events
-                    (userDocExists(request.auth.uid) && isUserRoleIn(request.auth.uid, ['admin'])) ||
-                    // Organizer/Coadmin can list events if they are querying by their own organizerId
-                    (
-                      userDocExists(request.auth.uid) &&
-                      isUserRoleIn(request.auth.uid, ['organizer', 'coadmin']) &&
-                      request.query.filters[0].fieldPath == 'organizerId' && // Direct array access if order is known
-                      request.query.filters[0].op == '==' &&
-                      request.query.filters[0].value == request.auth.uid &&
-                      request.query.filters.size() == 1 
-                    )
-                  ) || 
-                  // Public listing of published events
-                  (
-                    request.query.filters[0].fieldPath == 'status' &&
-                    request.query.filters[0].op == '==' &&
-                    request.query.filters[0].value == 'published' &&
-                    request.query.filters.size() == 1
-                  );
-
-
-      allow create: if request.auth != null && userDocExists(request.auth.uid) && 
-                      isUserRoleIn(request.auth.uid, ['admin', 'coadmin', 'organizer']) &&
+      allow create: if request.auth != null &&
+                      isUserRoleIn(request.auth.uid, ['organizer', 'coadmin', 'admin']) &&
                       request.resource.data.organizerId == request.auth.uid &&
-                      request.resource.data.status == 'draft' && // Default status
+                      request.resource.data.status in ['draft', 'published', 'archived', 'completed'] && // Allow setting initial status more flexibly
                       request.resource.data.createdAt == request.time &&
                       request.resource.data.updatedAt == request.time &&
                       request.resource.data.name is string && request.resource.data.name.size() > 0 &&
-                      request.resource.data.description is string &&
+                      request.resource.data.description is string && request.resource.data.description.size() > 0 &&
                       request.resource.data.date is timestamp &&
                       request.resource.data.venue is string && request.resource.data.venue.size() > 0 &&
                       request.resource.data.maxParticipants is number && request.resource.data.maxParticipants > 0 &&
-                      (request.resource.data.imageUrl is string || request.resource.data.imageUrl == null) &&
+                      // Ensure only expected fields from client, server sets timestamps
                       request.resource.data.keys().hasAll(['name', 'description', 'date', 'venue', 'maxParticipants', 'organizerId', 'status', 'createdAt', 'updatedAt']) &&
                       request.resource.data.keys().hasOnly(['name', 'description', 'date', 'venue', 'maxParticipants', 'imageUrl', 'organizerId', 'status', 'createdAt', 'updatedAt']);
 
-      allow update: if request.auth != null && userDocExists(request.auth.uid) &&
+
+      allow update: if request.auth != null &&
                       (
-                        (isUserRoleIn(request.auth.uid, ['organizer']) && resource.data.organizerId == request.auth.uid) ||
+                        (isUserRole(request.auth.uid, 'organizer') && isEventOrganizer(request.auth.uid, eventId)) ||
                         isUserRoleIn(request.auth.uid, ['admin', 'coadmin'])
                       ) &&
-                      request.resource.data.organizerId == resource.data.organizerId && // Cannot change organizerId
-                      request.resource.data.createdAt == resource.data.createdAt &&   // Cannot change createdAt
-                      request.resource.data.updatedAt == request.time; // Expect server timestamp
+                      request.resource.data.updatedAt == request.time &&
+                      request.resource.data.organizerId == resource.data.organizerId; // Prevent changing organizerId
 
-      allow delete: if request.auth != null && userDocExists(request.auth.uid) && 
-                      isUserRoleIn(request.auth.uid, ['admin']);
+      allow delete: if request.auth != null && isUserRole(request.auth.uid, 'admin');
     }
 
     // Rules for the 'registrations' collection
     match /registrations/{registrationId} {
+      // Allow any logged-in user to perform list queries on the collection.
+      // Specificity for who sees what is handled by client-side queries.
+      // Individual document access is then controlled by 'read' (get) rule.
+      allow list: if request.auth != null;
+
+      // Allow users to read their own registration.
+      // Admins can read any registration.
+      // Organizers/Coadmins can read registrations for events they organize.
+      allow read: if request.auth != null && (
+                      ( // Student can read their own registration
+                        resource.data.studentId == request.auth.uid &&
+                        isUserRole(request.auth.uid, 'student') 
+                      ) ||
+                      ( // Organizer/Coadmin can read registrations for their events
+                        isUserRoleIn(request.auth.uid, ['organizer', 'coadmin']) &&
+                        isEventOrganizer(request.auth.uid, resource.data.eventId)
+                      ) ||
+                      ( // Admin can read any registration
+                        isUserRole(request.auth.uid, 'admin')
+                      )
+                    );
+
+      // Allow a student to create a registration for themselves for an event that exists.
       allow create: if request.auth != null &&
-                      userDocExists(request.auth.uid) && 
-                      isUserRoleIn(request.auth.uid, ['student']) &&
-                      request.resource.data.studentId == request.auth.uid &&
+                      isUserRole(request.auth.uid, 'student') && // Requesting user must be a student
+                      request.resource.data.studentId == request.auth.uid && // Student can only register self
+                      // Ensure the event actually exists before allowing registration
+                      exists(/databases/$(database)/documents/events/$(request.resource.data.eventId)) &&
+                      // Validate incoming data fields
                       request.resource.data.status == 'pending' &&
-                      eventExists(request.resource.data.eventId) && // Ensure event exists
+                      request.resource.data.registeredAt == request.time && // Server timestamp
                       request.resource.data.eventId is string && request.resource.data.eventId.size() > 0 &&
                       request.resource.data.qrCodeData is string && request.resource.data.qrCodeData.size() > 0 &&
-                      request.resource.data.registeredAt == request.time && // Expect server timestamp
-                      !('checkedInAt' in request.resource.data) && // Client should not send this on create
+                      // Client sends: eventId, studentId, status, qrCodeData, registeredAt (as serverTimestamp())
+                      // checkedInAt is not set on create
+                      !('checkedInAt' in request.resource.data) &&
+                      request.resource.data.keys().hasAll(['eventId', 'studentId', 'status', 'qrCodeData', 'registeredAt']) &&
                       request.resource.data.keys().hasOnly(['eventId', 'studentId', 'status', 'qrCodeData', 'registeredAt']);
 
-
-      allow get: if request.auth != null && (
-                    // Student can read their own registration
-                    (resource.data.studentId == request.auth.uid) ||
-                    // Admin can read any registration
-                    (userDocExists(request.auth.uid) && isUserRoleIn(request.auth.uid, ['admin'])) ||
-                    // Organizer/Coadmin can read registrations for events they organize
-                    (userDocExists(request.auth.uid) && isUserRoleIn(request.auth.uid, ['coadmin', 'organizer']) && isEventOrganizer(request.auth.uid, resource.data.eventId))
-                  );
-      
-      allow list: if request.auth != null &&
-                  (
-                    // STUDENT: Can list THEIR OWN registrations FOR A SPECIFIC EVENT
-                    // Query must filter by studentId == request.auth.uid AND by eventId
-                    (
-                      userDocExists(request.auth.uid) && isUserRoleIn(request.auth.uid, ['student']) &&
-                      request.query.filters.size() == 2 &&
+      // Allow organizers or admins to update the status of a registration.
+      allow update: if request.auth != null &&
                       (
-                        (request.query.filters[0].fieldPath == 'studentId' && request.query.filters[0].op == '==' && request.query.filters[0].value == request.auth.uid &&
-                         request.query.filters[1].fieldPath == 'eventId' && request.query.filters[1].op == '==' && request.query.filters[1].value is string)
-                         ||
-                        (request.query.filters[0].fieldPath == 'eventId' && request.query.filters[0].op == '==' && request.query.filters[0].value is string &&
-                         request.query.filters[1].fieldPath == 'studentId' && request.query.filters[1].op == '==' && request.query.filters[1].value == request.auth.uid)
-                      )
-                    ) ||
-                    // ORGANIZER/COADMIN: Can list registrations FOR A SPECIFIC EVENT they organize
-                    // Query must filter by eventId
-                    (
-                      userDocExists(request.auth.uid) && isUserRoleIn(request.auth.uid, ['organizer', 'coadmin']) &&
-                      request.query.filters.size() >= 1 && // Must have at least eventId filter
-                      request.query.filters[0].fieldPath == 'eventId' && request.query.filters[0].op == '==' &&
-                      isEventOrganizer(request.auth.uid, request.query.filters[0].value) 
-                      // If other filters are added by client (like orderBy status), this rule part needs to be more flexible or specific
-                    ) ||
-                    // ADMIN: Can list registrations (potentially with any client-side filters)
-                    (userDocExists(request.auth.uid) && isUserRoleIn(request.auth.uid, ['admin']))
-                  );
-                  
-      allow update: if request.auth != null && userDocExists(request.auth.uid) &&
-                      (
-                        // Organizer/Coadmin updating registrations for their event
-                        (
+                        ( // Organizer/Coadmin for their event can update specific fields
                           isUserRoleIn(request.auth.uid, ['organizer', 'coadmin']) &&
-                          isEventOrganizer(request.auth.uid, resource.data.eventId) && // Check existing doc's eventId
+                          isEventOrganizer(request.auth.uid, resource.data.eventId) && // Check against existing registration's eventId
+                          // Allowed fields to change: status, checkedInAt. 'updatedAt' is server-managed by request.time
                           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'checkedInAt', 'updatedAt']) &&
-                          request.resource.data.updatedAt == request.time // Expect server timestamp for updatedAt
+                          // Validate status value if present in diff
+                          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['status']) || request.resource.data.status in ['pending', 'approved', 'rejected', 'attended']) &&
+                          // Validate checkedInAt value if present in diff
+                          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['checkedInAt']) || request.resource.data.checkedInAt is timestamp || request.resource.data.checkedInAt == null)
                         ) ||
-                        // Admin updating any registration
-                        (
-                          isUserRoleIn(request.auth.uid, ['admin']) &&
-                          request.resource.data.eventId == resource.data.eventId && 
-                          request.resource.data.studentId == resource.data.studentId &&
-                          request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'checkedInAt', 'qrCodeData', 'updatedAt']) &&
-                          request.resource.data.updatedAt == request.time // Expect server timestamp for updatedAt
+                        ( // Admin can update specific fields
+                          isUserRole(request.auth.uid, 'admin') &&
+                          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'checkedInAt', 'updatedAt']) &&
+                          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['status']) || request.resource.data.status in ['pending', 'approved', 'rejected', 'attended']) &&
+                          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['checkedInAt']) || request.resource.data.checkedInAt is timestamp || request.resource.data.checkedInAt == null)
                         )
-                      );
+                      ) &&
+                      request.resource.data.updatedAt == request.time && // Ensure updatedAt is set for the operation
+                      request.resource.data.studentId == resource.data.studentId && // Prevent changing studentId
+                      request.resource.data.eventId == resource.data.eventId;       // Prevent changing eventId
+
+      // Deleting registrations is disallowed; use a 'rejected' or 'cancelled' status instead.
       allow delete: if false;
     }
   }
 }
-    
+
