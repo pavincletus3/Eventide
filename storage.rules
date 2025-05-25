@@ -3,21 +3,35 @@ rules_version = '2';
 
 service firebase.storage {
   match /b/{bucket}/o {
-    // Rules for event images
-    match /event-images/{allPaths=**} {
-      // Allow any authenticated user to read event images
-      allow read: if request.auth != null;
-
-      // Allow users with 'organizer', 'coadmin', or 'admin' role to upload/write event images
-      allow write: if request.auth != null &&
-                       exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-                       get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['organizer', 'coadmin', 'admin'];
+    // Helper function to get user role from Firestore
+    function getUserRole(userId) {
+      let userDocPath = /databases/$(database)/documents/users/$(userId);
+      // Check if the user document exists and has a 'role' field
+      if (exists(userDocPath) && 'role' in get(userDocPath).data) {
+        return get(userDocPath).data.role;
+      }
+      return null; // Return null if user document or role field doesn't exist
     }
 
-    // To be explicit, you can add a rule to deny all other access,
-    // though Firebase Storage rules are deny-by-default if no other rule allows access.
-    // match /{allPaths=**} {
-    //  allow read, write: if false;
-    // }
+    // Rules for event images
+    match /event-images/{allPaths=**} {
+      // Authenticated users can read event images.
+      allow read: if request.auth != null;
+
+      // Organizer, coadmin, and admin roles can write (upload/update/delete) event images.
+      allow write: if request.auth != null &&
+                     (getUserRole(request.auth.uid) == 'organizer' ||
+                      getUserRole(request.auth.uid) == 'coadmin' ||
+                      getUserRole(request.auth.uid) == 'admin');
+                      // Optional: Add size validation: request.resource.size < 5 * 1024 * 1024 (e.g. 5MB)
+                      // Optional: Add content type validation: request.resource.contentType.matches('image/.*')
+    }
+
+    // Default deny all other paths if not explicitly allowed.
+    // This rule is fine, but ensure that any other paths you want to allow
+    // have their own specific match blocks above this one.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
   }
 }
