@@ -74,7 +74,7 @@ export default function HomePage() {
 
       <div className="space-x-4">
         <Button asChild size="lg">
-          <Link href="/#explore">Explore Events</Link>
+          <Link href="/events">Explore Events</Link>
         </Button>
         {(authLoading || isRoleLoading) && user && (
           <Button variant="outline" size="lg" disabled>
