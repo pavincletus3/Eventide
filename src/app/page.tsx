@@ -1,9 +1,56 @@
 
+"use client";
+
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
+import { useAuth } from '@/contexts/AuthContext';
+import type { UserProfile, UserRole } from '@/types/user';
+import { useEffect, useState } from 'react';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
+import { PlusCircle, Loader2 } from 'lucide-react';
 
 export default function HomePage() {
+  const { user, initialLoading: authLoading } = useAuth();
+  const [userRole, setUserRole] = useState<UserRole | null>(null);
+  const [isRoleLoading, setIsRoleLoading] = useState(true);
+
+  useEffect(() => {
+    if (authLoading) {
+      // Still waiting for auth state to be determined
+      setIsRoleLoading(true);
+      return;
+    }
+    if (user) {
+      setIsRoleLoading(true);
+      const fetchRole = async () => {
+        try {
+          const userDocRef = doc(db, 'users', user.uid);
+          const userDocSnap = await getDoc(userDocRef);
+          if (userDocSnap.exists()) {
+            const profile = userDocSnap.data() as UserProfile;
+            setUserRole(profile.role);
+          } else {
+            setUserRole(null); // User profile doesn't exist
+            console.warn("User profile document not found for UID:", user.uid);
+          }
+        } catch (error) {
+          console.error("Error fetching user role:", error);
+          setUserRole(null);
+        } finally {
+          setIsRoleLoading(false);
+        }
+      };
+      fetchRole();
+    } else {
+      setUserRole(null);
+      setIsRoleLoading(false);
+    }
+  }, [user, authLoading]);
+
+  const canCreateEvent = user && (userRole === 'organizer' || userRole === 'coadmin' || userRole === 'admin');
+
   return (
     <div className="flex flex-col items-center text-center space-y-8 py-12">
       <div className="space-y-4">
@@ -29,9 +76,20 @@ export default function HomePage() {
         <Button asChild size="lg">
           <Link href="/#explore">Explore Events</Link>
         </Button>
-        <Button asChild variant="outline" size="lg">
-          <Link href="/events/create">Create an Event</Link>
-        </Button>
+        {(authLoading || isRoleLoading) && user && (
+          <Button variant="outline" size="lg" disabled>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Checking permissions...
+          </Button>
+        )}
+        {!authLoading && !isRoleLoading && canCreateEvent && (
+          <Button asChild variant="outline" size="lg">
+            <Link href="/events/create">
+              <PlusCircle className="mr-2 h-5 w-5" />
+              Create an Event
+            </Link>
+          </Button>
+        )}
       </div>
 
       <div className="w-full max-w-4xl pt-12">
