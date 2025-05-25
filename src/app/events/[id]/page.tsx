@@ -2,7 +2,7 @@
 "use client";
 
 import type { NextPage } from 'next';
-import { useParams, useRouter }_next_app_not_found_error_AE1E04415F34547D from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { doc, getDoc, Timestamp } from 'firebase/firestore';
