@@ -107,6 +107,30 @@ const CreateEventPage = () => {
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
+      if (file.size > 10 * 1024 * 1024) { // 10MB limit
+        toast({
+          variant: 'destructive',
+          title: 'File Too Large',
+          description: 'Image size should not exceed 10MB.',
+        });
+        setSelectedFile(null);
+        form.setValue('image', undefined);
+        setImagePreview(null);
+        if(event.target) event.target.value = ''; // Clear the file input
+        return;
+      }
+      if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(file.type)) {
+        toast({
+          variant: 'destructive',
+          title: 'Invalid File Type',
+          description: 'Please upload a valid image file (PNG, JPG, WEBP, GIF).',
+        });
+        setSelectedFile(null);
+        form.setValue('image', undefined);
+        setImagePreview(null);
+        if(event.target) event.target.value = ''; // Clear the file input
+        return;
+      }
       setSelectedFile(file);
       form.setValue('image', file);
       const reader = new FileReader();
@@ -135,7 +159,20 @@ const CreateEventPage = () => {
 
       if (selectedFile) {
         const imagePath = `event-images/${eventId}/${selectedFile.name}`;
-        imageUrl = await uploadFileAndGetURL(selectedFile, imagePath);
+        try {
+          console.log(`Attempting to upload image to: ${imagePath}`);
+          imageUrl = await uploadFileAndGetURL(selectedFile, imagePath);
+          console.log('Image uploaded successfully, URL:', imageUrl);
+        } catch (uploadError: any) {
+          console.error('Image upload failed during event creation:', uploadError);
+          toast({
+            variant: 'destructive',
+            title: 'Image Upload Failed',
+            description: `Could not upload the event image. Error: ${uploadError.message || 'Unknown error during upload.'}. Please check console for details.`,
+          });
+          setIsSubmitting(false);
+          return; 
+        }
       }
 
       const eventDate = new Date(values.date);
@@ -150,7 +187,6 @@ const CreateEventPage = () => {
         imageUrl: imageUrl || null,
         organizerId: user.uid,
         status: 'draft' as EventStatus,
-        // createdAt and updatedAt will be set by serverTimestamp
       };
 
       await setDoc(newEventRef, {
@@ -164,9 +200,9 @@ const CreateEventPage = () => {
       setSelectedFile(null);
       setImagePreview(null);
       // Optionally, redirect: router.push(`/events/${eventId}`); or router.push('/events');
-    } catch (error) {
-      console.error('Error creating event:', error);
-      toast({ variant: 'destructive', title: 'Error', description: 'Failed to create event. Please try again.' });
+    } catch (error: any) {
+      console.error('Error creating event (outer catch):', error);
+      toast({ variant: 'destructive', title: 'Error', description: `Failed to create event. ${error.message || 'Please try again.'}` });
     } finally {
       setIsSubmitting(false);
     }
@@ -182,7 +218,6 @@ const CreateEventPage = () => {
   }
 
   if (!isAuthorized && !checkingAuth) {
-    // This case should ideally be handled by the redirect, but as a fallback:
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
         <ShieldAlert className="h-16 w-16 text-destructive mb-4" />
@@ -264,7 +299,7 @@ const CreateEventPage = () => {
                             mode="single"
                             selected={field.value}
                             onSelect={field.onChange}
-                            disabled={(date) => date < new Date(new Date().setHours(0,0,0,0)) } // Disable past dates
+                            disabled={(date) => date < new Date(new Date().setHours(0,0,0,0)) }
                             initialFocus
                           />
                         </PopoverContent>
@@ -353,11 +388,11 @@ const CreateEventPage = () => {
                             <div className="flex text-sm text-muted-foreground">
                                 <span className="relative rounded-md font-medium text-primary hover:text-primary/80 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-ring">
                                     <span>Upload a file</span>
-                                    <input id="event-image-upload" name="image" type="file" className="sr-only" accept="image/png, image/jpeg, image/webp" onChange={handleFileChange} />
+                                    <input id="event-image-upload" name="image" type="file" className="sr-only" accept="image/png, image/jpeg, image/webp, image/gif" onChange={handleFileChange} />
                                 </span>
                                 <p className="pl-1">or drag and drop</p>
                             </div>
-                            <p className="text-xs text-muted-foreground">PNG, JPG, WEBP up to 10MB</p>
+                            <p className="text-xs text-muted-foreground">PNG, JPG, WEBP, GIF up to 10MB</p>
                         </div>
                     </label>
                 </FormControl>
@@ -377,3 +412,5 @@ const CreateEventPage = () => {
 };
 
 export default CreateEventPage;
+
+    
