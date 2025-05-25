@@ -4,84 +4,128 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper function to get user role
+    // Helper function to get user's role from their profile
     function getUserRole(userId) {
-      return get(/databases/$(database)/documents/users/$(userId)).data.role;
+      let userDoc = get(/databases/$(database)/documents/users/$(userId));
+      if (exists(/databases/$(database)/documents/users/$(userId))) {
+        return userDoc.data.role;
+      }
+      return null; // Or some default non-privileged role string if preferred
     }
 
-    // Helper function to check if user is an admin
-    function isAdmin(userId) {
-      return getUserRole(userId) == 'admin';
+    // Helper function to check if a user is an organizer of a specific event
+    function isEventOrganizer(userId, eventId) {
+      let eventDoc = get(/databases/$(database)/documents/events/$(eventId));
+      if (exists(/databases/$(database)/documents/events/$(eventId))) {
+        return eventDoc.data.organizerId == userId;
+      }
+      return false;
     }
-
-    // Helper function to check if user is an organizer, coadmin, or admin
-    function isOrganizerOrHigher(userId) {
-      let userRole = getUserRole(userId);
-      return userRole == 'organizer' || userRole == 'coadmin' || userRole == 'admin';
-    }
-
-    // Rules for the 'users' collection
+    
+    // Users Collection Rules
     match /users/{userId} {
-      allow read: if request.auth != null && (request.auth.uid == userId || isAdmin(request.auth.uid));
-      allow create: if request.auth != null && request.auth.uid == userId
-                    && request.resource.data.email == request.auth.token.email
-                    && request.resource.data.role == 'student' // Default role on creation
-                    && request.resource.data.uid == userId
-                    && request.resource.data.createdAt == request.time
-                    && request.resource.data.updatedAt == request.time;
-      allow update: if request.auth != null && (request.auth.uid == userId || isAdmin(request.auth.uid))
-                    // Fields that can be updated by user: name, (potentially others in future)
-                    // Role updates are restricted to admins in this rule, specific fields can be checked
-                    // Ensuring uid, email, createdAt are not changed by user directly
-                    && request.resource.data.uid == resource.data.uid
-                    && request.resource.data.email == resource.data.email
-                    && request.resource.data.createdAt == resource.data.createdAt
-                    && request.resource.data.updatedAt == request.time;
-                    // Admin can update any field, including role.
-                    // If non-admin is updating, ensure they are not changing their own role:
-                    // && (isAdmin(request.auth.uid) || request.resource.data.role == resource.data.role)
+      // Allow user to read and update their own profile
+      allow read, update: if request.auth != null && request.auth.uid == userId;
+      
+      // Allow user to create their own profile upon registration (e.g., with default student role)
+      allow create: if request.auth != null && request.auth.uid == userId &&
+                       request.resource.data.role == 'student' && // Enforce default role on creation
+                       request.resource.data.uid == userId &&
+                       request.resource.data.email == request.auth.token.email &&
+                       request.resource.data.createdAt == request.time &&
+                       request.resource.data.updatedAt == request.time;
 
-      allow delete: if false; // Generally, users should not be hard-deleted. Consider a 'status: deactivated' field.
+      // Admin can read and write any user profile
+      allow list, get, write: if request.auth != null && getUserRole(request.auth.uid) == 'admin';
     }
 
-    // Rules for the 'events' collection
+    // Events Collection Rules
     match /events/{eventId} {
-      // Authenticated users can read published events.
-      // Organizers/coadmins/admins can read any event.
-      allow read: if request.auth != null && 
-                    (resource.data.status == 'published' || isOrganizerOrHigher(request.auth.uid));
+      // Anyone can read published events
+      allow get: if resource.data.status == 'published';
+      allow list: if request.query.limit <= 10 && // Example: limit public listing queries
+                     (request.query.offset == null || request.query.offset == 0) && // Basic pagination control
+                     (request.resource == null || resource.data.status == 'published'); // Ensure list only gets published
 
-      // Organizers, coadmins, and admins can create new events.
-      allow create: if request.auth != null && isOrganizerOrHigher(request.auth.uid)
-                    // Validate incoming data
-                    && request.resource.data.organizerId == request.auth.uid
-                    && request.resource.data.name is string && request.resource.data.name.size() > 0
-                    && request.resource.data.description is string
-                    && request.resource.data.date is timestamp
-                    && request.resource.data.venue is string
-                    && request.resource.data.maxParticipants is number && request.resource.data.maxParticipants > 0
-                    && request.resource.data.status in ['draft', 'published'] // Initial status
-                    && (!('imageUrl' in request.resource.data) || request.resource.data.imageUrl is string || request.resource.data.imageUrl == null)
-                    && request.resource.data.createdAt == request.time
-                    && request.resource.data.updatedAt == request.time;
+      // Organizer, coadmin, and admin roles can create events
+      allow create: if request.auth != null &&
+                       (getUserRole(request.auth.uid) in ['organizer', 'coadmin', 'admin']) &&
+                       request.resource.data.organizerId == request.auth.uid && // Creator must be organizer
+                       request.resource.data.status == 'draft' && // Default status
+                       request.resource.data.createdAt == request.time &&
+                       request.resource.data.updatedAt == request.time &&
+                       request.resource.data.name is string && request.resource.data.name.size() > 0 &&
+                       request.resource.data.description is string && request.resource.data.description.size() > 0 &&
+                       request.resource.data.date is timestamp &&
+                       request.resource.data.venue is string && request.resource.data.venue.size() > 0 &&
+                       request.resource.data.maxParticipants is number && request.resource.data.maxParticipants > 0;
+                       // Add more field validations as needed
+
+      // Organizer of this event, coadmins, and admins can update the event
+      allow update: if request.auth != null &&
+                       ( (getUserRole(request.auth.uid) in ['organizer', 'coadmin'] && resource.data.organizerId == request.auth.uid) ||
+                         getUserRole(request.auth.uid) == 'admin' ) &&
+                       request.resource.data.updatedAt == request.time &&
+                       request.resource.data.organizerId == resource.data.organizerId; // Organizer ID cannot change
+
+      // Admins can delete any event
+      allow delete: if request.auth != null && getUserRole(request.auth.uid) == 'admin';
+    }
+
+    // Registrations Collection Rules
+    match /registrations/{registrationId} {
+      // Student can create their own registration
+      allow create: if request.auth != null &&
+                       getUserRole(request.auth.uid) == 'student' &&
+                       request.resource.data.studentId == request.auth.uid &&
+                       request.resource.data.status == 'pending' && // Enforce default status on create
+                       request.resource.data.registeredAt == request.time &&
+                       request.resource.data.eventId is string &&
+                       request.resource.data.qrCodeData is string;
+
+      // Student can read their own registrations
+      allow get: if request.auth != null && resource.data.studentId == request.auth.uid;
+      allow list: if request.auth != null && request.query.where.studentId == request.auth.uid; // Allows querying own registrations
+
+
+      // Organizer or Coadmin can read/list registrations for events they own
+      // Admin can read/list any registration
+      allow get, list: if request.auth != null &&
+                        ( ( (getUserRole(request.auth.uid) == 'organizer' || getUserRole(request.auth.uid) == 'coadmin') && 
+                            isEventOrganizer(request.auth.uid, (resource == null ? request.resource.data.eventId : resource.data.eventId) ) 
+                          ) || 
+                          getUserRole(request.auth.uid) == 'admin' 
+                        );
       
-      // The organizer who created an event, coadmins, and admins can update events.
-      allow update: if request.auth != null && 
-                      (resource.data.organizerId == request.auth.uid || isOrganizerOrHigher(request.auth.uid))
-                    // Validate data on update
-                    && request.resource.data.organizerId == resource.data.organizerId // Organizer cannot be changed
-                    && request.resource.data.createdAt == resource.data.createdAt // Creation time cannot be changed
-                    && request.resource.data.updatedAt == request.time
-                    && request.resource.data.name is string && request.resource.data.name.size() > 0
-                    && request.resource.data.description is string
-                    && request.resource.data.date is timestamp
-                    && request.resource.data.venue is string
-                    && request.resource.data.maxParticipants is number && request.resource.data.maxParticipants > 0
-                    && request.resource.data.status in ['draft', 'published', 'archived', 'completed']
-                    && (!('imageUrl' in request.resource.data) || request.resource.data.imageUrl is string || request.resource.data.imageUrl == null);
-
-      // Only admins can delete events.
-      allow delete: if request.auth != null && isAdmin(request.auth.uid);
+      // Organizer or Coadmin can update status and checkedInAt for registrations of events they own.
+      // Admin can update any field of any registration.
+      allow update: if request.auth != null &&
+                       (
+                         ( // Admin can update anything (except studentId, eventId, registeredAt for integrity)
+                           getUserRole(request.auth.uid) == 'admin' &&
+                           request.resource.data.studentId == resource.data.studentId &&
+                           request.resource.data.eventId == resource.data.eventId &&
+                           request.resource.data.registeredAt == resource.data.registeredAt &&
+                           request.resource.data.qrCodeData == resource.data.qrCodeData
+                         ) ||
+                         ( // Organizer/Coadmin can update specific fields for their events
+                           (getUserRole(request.auth.uid) == 'organizer' || getUserRole(request.auth.uid) == 'coadmin') &&
+                           isEventOrganizer(request.auth.uid, resource.data.eventId) &&
+                           request.resource.keys().hasOnly(['status', 'checkedInAt', 'updatedAt']) && // Restrict fields they can update
+                           (request.resource.data.checkedInAt == request.time || request.resource.data.checkedInAt == null || request.resource.data.checkedInAt is timestamp) &&
+                           request.resource.data.status in ['pending', 'approved', 'rejected', 'attended'] &&
+                           // Ensure other important fields are not changed by organizer/coadmin
+                           request.resource.data.studentId == resource.data.studentId &&
+                           request.resource.data.eventId == resource.data.eventId &&
+                           request.resource.data.registeredAt == resource.data.registeredAt &&
+                           request.resource.data.qrCodeData == resource.data.qrCodeData
+                         )
+                       );
+      
+      // No one can delete registrations directly for now (archiving or status change is preferred)
+      // Admins could be allowed if needed:
+      // allow delete: if request.auth != null && getUserRole(request.auth.uid) == 'admin';
+      allow delete: if false; 
     }
   }
 }
