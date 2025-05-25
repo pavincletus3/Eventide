@@ -7,16 +7,28 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, orderBy, collectionGroup, getCountFromServer, Timestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, doc, updateDoc, serverTimestamp, getCountFromServer, Timestamp } from 'firebase/firestore';
 import type { UserProfile } from '@/types/user';
-import type { Event as EventType } from '@/types/event';
-import type { Registration } from '@/types/registration';
+import type { Event as EventType, EventStatus } from '@/types/event';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, ShieldAlert, CalendarPlus, ListOrdered, Eye } from 'lucide-react';
+import { Loader2, ShieldAlert, CalendarPlus, ListOrdered, Eye, CheckCircle, Archive, Edit3, AlertTriangle } from 'lucide-react';
 import { format } from 'date-fns';
+import { useToast } from '@/hooks/use-toast';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
+
 
 interface EventWithRegistrationCounts extends EventType {
   pendingRegistrations: number;
@@ -26,18 +38,24 @@ interface EventWithRegistrationCounts extends EventType {
 const OrganizerDashboardPage: NextPage = () => {
   const { user, initialLoading: authLoading } = useAuth();
   const router = useRouter();
+  const { toast } = useToast();
+
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [events, setEvents] = useState<EventWithRegistrationCounts[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [updatingEventId, setUpdatingEventId] = useState<string | null>(null);
 
   const fetchUserProfileAndAuthorize = useCallback(async (uid: string) => {
     setLoading(true);
     try {
-      const userDocSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', uid)));
-      if (!userDocSnap.empty) {
-        const profile = userDocSnap.docs[0].data() as UserProfile;
+      // Firestore uses UID as document ID in 'users' collection
+      const userDocRef = doc(db, 'users', uid);
+      const userDocSnap = await getDoc(userDocRef);
+
+      if (userDocSnap.exists()) {
+        const profile = { uid: userDocSnap.id, ...userDocSnap.data() } as UserProfile;
         setUserProfile(profile);
         if (['organizer', 'coadmin', 'admin'].includes(profile.role)) {
           setIsAuthorized(true);
@@ -53,6 +71,7 @@ const OrganizerDashboardPage: NextPage = () => {
       return null;
     }
   }, []);
+
 
   const fetchEvents = useCallback(async (role: string | null, uid: string | null) => {
     if (!role || !uid) {
@@ -74,8 +93,6 @@ const OrganizerDashboardPage: NextPage = () => {
       const fetchedEventsPromises = querySnapshot.docs.map(async (docSnap) => {
         const eventData = { id: docSnap.id, ...docSnap.data() } as EventType;
         
-        // Fetch registration counts for each event
-        // This is a simplified approach for now. For scalability, consider denormalization.
         let pendingCount = 0;
         let approvedCount = 0;
         
@@ -117,18 +134,56 @@ const OrganizerDashboardPage: NextPage = () => {
     fetchUserProfileAndAuthorize(user.uid).then(role => {
       if (role && ['organizer', 'coadmin', 'admin'].includes(role)) {
         fetchEvents(role, user.uid);
-      } else if (role) { // User profile fetched, but not authorized
+      } else if (role) { 
         router.replace('/');
       }
-      // If role is null, it means profile fetch failed or user not found, error already set
     });
   }, [user, authLoading, router, fetchUserProfileAndAuthorize, fetchEvents]);
+
+  const handleUpdateEventStatus = async (eventId: string, newStatus: EventStatus) => {
+    setUpdatingEventId(eventId);
+    try {
+      const eventDocRef = doc(db, 'events', eventId);
+      await updateDoc(eventDocRef, {
+        status: newStatus,
+        updatedAt: serverTimestamp(),
+      });
+      toast({
+        title: "Success",
+        description: `Event status updated to ${newStatus}.`,
+      });
+      setEvents(prevEvents => 
+        prevEvents.map(event => 
+          event.id === eventId ? { ...event, status: newStatus, updatedAt: Timestamp.now() } : event
+        )
+      );
+    } catch (err: any) {
+      console.error(`Error updating event status to ${newStatus}:`, err);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: `Failed to update event status. ${err.message}`,
+      });
+    } finally {
+      setUpdatingEventId(null);
+    }
+  };
 
 
   const formatEventDate = (date: Timestamp | Date | undefined): string => {
     if (!date) return "Date TBD";
     const jsDate = date instanceof Timestamp ? date.toDate() : date;
     return format(jsDate, "PPp");
+  };
+
+  const getStatusBadgeVariant = (status?: EventStatus) => {
+    switch (status) {
+      case 'published': return 'default';
+      case 'draft': return 'secondary';
+      case 'completed': return 'outline';
+      case 'archived': return 'destructive';
+      default: return 'secondary';
+    }
   };
 
   if (authLoading || loading) {
@@ -152,7 +207,12 @@ const OrganizerDashboardPage: NextPage = () => {
   }
   
   if (error) {
-    return <div className="text-center text-destructive py-10">{error}</div>;
+    return (
+      <div className="text-center text-destructive py-10">
+        <AlertTriangle className="mx-auto h-12 w-12 mb-2" />
+        <p>{error}</p>
+      </div>
+    );
   }
 
   return (
@@ -162,7 +222,7 @@ const OrganizerDashboardPage: NextPage = () => {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
                 <ListOrdered className="h-6 w-6 text-primary"/>
-                <CardTitle className="text-2xl font-bold text-primary">Organizer Dashboard</CardTitle>
+                <CardTitle className="text-2xl font-bold text-primary">Event Management</CardTitle>
             </div>
             <Button asChild>
                 <Link href="/events/create">
@@ -170,7 +230,7 @@ const OrganizerDashboardPage: NextPage = () => {
                 </Link>
             </Button>
           </div>
-          <CardDescription>Manage your events and view their registration status.</CardDescription>
+          <CardDescription>Manage your events, view registrations, and update event statuses.</CardDescription>
         </CardHeader>
         <CardContent>
           {events.length === 0 && !loading ? (
@@ -194,19 +254,94 @@ const OrganizerDashboardPage: NextPage = () => {
                     <TableCell className="font-medium">{event.name}</TableCell>
                     <TableCell>{formatEventDate(event.date)}</TableCell>
                     <TableCell>
-                      <Badge variant={event.status === 'published' ? 'default' : event.status === 'draft' ? 'secondary' : 'outline'}>
+                      <Badge variant={getStatusBadgeVariant(event.status)}>
                         {event.status?.charAt(0).toUpperCase() + event.status?.slice(1)}
                       </Badge>
                     </TableCell>
                     <TableCell>
                       {event.pendingRegistrations} Pending / {event.approvedRegistrations} Approved
                     </TableCell>
-                    <TableCell className="text-right">
-                      <Button asChild variant="outline" size="sm">
+                    <TableCell className="text-right space-x-2">
+                      <Button asChild variant="outline" size="sm" className="mr-2">
                         <Link href={`/organizer/event/${event.id}/registrations`}>
-                          <Eye className="mr-1 h-4 w-4" /> Manage
+                          <Eye className="mr-1 h-4 w-4" /> Manage Registrations
                         </Link>
                       </Button>
+                      {updatingEventId === event.id ? (
+                        <Loader2 className="h-5 w-5 animate-spin inline-flex" />
+                      ) : (
+                        <>
+                          {event.status === 'draft' && (userProfile?.role === 'admin' || userProfile?.role === 'coadmin' || event.organizerId === user?.uid) && (
+                             <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button variant="outline" size="sm" className="text-green-600 border-green-600 hover:bg-green-50 hover:text-green-700">
+                                  <CheckCircle className="mr-1 h-4 w-4"/> Publish
+                                </Button>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>Confirm Publish</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    Are you sure you want to publish the event "{event.name}"? It will become visible to students.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                  <AlertDialogAction onClick={() => handleUpdateEventStatus(event.id!, 'published')} className="bg-green-600 hover:bg-green-700">
+                                    Publish Event
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          )}
+                          {event.status === 'published' && (userProfile?.role === 'admin' || userProfile?.role === 'coadmin' || event.organizerId === user?.uid) && (
+                            <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button variant="outline" size="sm" className="text-amber-600 border-amber-600 hover:bg-amber-50 hover:text-amber-700">
+                                <Archive className="mr-1 h-4 w-4"/> Archive
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Confirm Archive</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Are you sure you want to archive the event "{event.name}"? It will be hidden from public view and new registrations will be disabled.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => handleUpdateEventStatus(event.id!, 'archived')} className="bg-amber-600 hover:bg-amber-700">
+                                  Archive Event
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                          )}
+                          {event.status === 'archived' && (userProfile?.role === 'admin' || userProfile?.role === 'coadmin' || event.organizerId === user?.uid) && (
+                            <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button variant="outline" size="sm" className="text-blue-600 border-blue-600 hover:bg-blue-50 hover:text-blue-700">
+                                <Edit3 className="mr-1 h-4 w-4"/> Set to Draft
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Confirm Set to Draft</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Are you sure you want to set the event "{event.name}" back to draft? You can then edit and re-publish it.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => handleUpdateEventStatus(event.id!, 'draft')} className="bg-blue-600 hover:bg-blue-700">
+                                  Set to Draft
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                          )}
+                        </>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -220,4 +355,6 @@ const OrganizerDashboardPage: NextPage = () => {
 };
 
 export default OrganizerDashboardPage;
+    
+
     
