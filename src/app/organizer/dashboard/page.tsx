@@ -7,7 +7,19 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, orderBy, doc, updateDoc, serverTimestamp, getCountFromServer, Timestamp } from 'firebase/firestore';
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  getDoc, // Ensured import for fetching a single document
+  orderBy,
+  doc,
+  updateDoc,
+  serverTimestamp,
+  getCountFromServer,
+  Timestamp
+} from 'firebase/firestore';
 import type { UserProfile } from '@/types/user';
 import type { Event as EventType, EventStatus } from '@/types/event';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -136,6 +148,11 @@ const OrganizerDashboardPage: NextPage = () => {
         fetchEvents(role, user.uid);
       } else if (role) { 
         router.replace('/');
+      } else { // If role is null (profile not found or other issue)
+        setIsAuthorized(false); // Ensure isAuthorized is false if role couldn't be determined
+        setLoading(false); // Stop loading
+        setError("Could not verify user role. Profile may be missing.");
+        router.replace('/');
       }
     });
   }, [user, authLoading, router, fetchUserProfileAndAuthorize, fetchEvents]);
@@ -195,18 +212,18 @@ const OrganizerDashboardPage: NextPage = () => {
     );
   }
 
-  if (!isAuthorized && !authLoading) {
+  if (!isAuthorized && !authLoading && !loading) { // Added !loading to ensure it's not a flicker
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
         <ShieldAlert className="h-16 w-16 text-destructive mb-4" />
         <h2 className="text-2xl font-semibold mb-2">Access Denied</h2>
-        <p className="text-muted-foreground">You do not have permission to view this page.</p>
+        <p className="text-muted-foreground">{error || "You do not have permission to view this page."}</p>
         <Button onClick={() => router.push('/')} className="mt-4">Go to Homepage</Button>
       </div>
     );
   }
   
-  if (error) {
+  if (error && !loading) { // Show error only if not loading
     return (
       <div className="text-center text-destructive py-10">
         <AlertTriangle className="mx-auto h-12 w-12 mb-2" />
@@ -224,11 +241,13 @@ const OrganizerDashboardPage: NextPage = () => {
                 <ListOrdered className="h-6 w-6 text-primary"/>
                 <CardTitle className="text-2xl font-bold text-primary">Event Management</CardTitle>
             </div>
-            <Button asChild>
-                <Link href="/events/create">
-                    <CalendarPlus className="mr-2 h-4 w-4"/> Create New Event
-                </Link>
-            </Button>
+            {(userProfile?.role === 'admin' || userProfile?.role === 'coadmin' || userProfile?.role === 'organizer') && (
+              <Button asChild>
+                  <Link href="/events/create">
+                      <CalendarPlus className="mr-2 h-4 w-4"/> Create New Event
+                  </Link>
+              </Button>
+            )}
           </div>
           <CardDescription>Manage your events, view registrations, and update event statuses.</CardDescription>
         </CardHeader>
@@ -262,11 +281,13 @@ const OrganizerDashboardPage: NextPage = () => {
                       {event.pendingRegistrations} Pending / {event.approvedRegistrations} Approved
                     </TableCell>
                     <TableCell className="text-right space-x-2">
-                      <Button asChild variant="outline" size="sm" className="mr-2">
-                        <Link href={`/organizer/event/${event.id}/registrations`}>
-                          <Eye className="mr-1 h-4 w-4" /> Manage Registrations
-                        </Link>
-                      </Button>
+                       {(userProfile?.role === 'admin' || userProfile?.role === 'coadmin' || event.organizerId === user?.uid) && (
+                         <Button asChild variant="outline" size="sm" className="mr-2">
+                            <Link href={`/organizer/event/${event.id}/registrations`}>
+                              <Eye className="mr-1 h-4 w-4" /> Manage Registrations
+                            </Link>
+                          </Button>
+                       )}
                       {updatingEventId === event.id ? (
                         <Loader2 className="h-5 w-5 animate-spin inline-flex" />
                       ) : (
