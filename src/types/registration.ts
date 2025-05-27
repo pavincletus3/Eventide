@@ -1,7 +1,10 @@
+import type { Timestamp } from "firebase/firestore";
 
-import type { Timestamp } from 'firebase/firestore';
-
-export type RegistrationStatus = 'pending' | 'approved' | 'rejected' | 'attended';
+export type RegistrationStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "attended";
 
 export interface Registration {
   id?: string; // Firestore document ID
@@ -10,6 +13,7 @@ export interface Registration {
   status: RegistrationStatus;
   registeredAt: Timestamp;
   checkedInAt?: Timestamp | null;
-  qrCodeData: string; 
+  qrCodeData: string;
+  certificateUrl?: string; // URL to the generated certificate PDF
   // Potentially other fields like notes, feedback, etc. could be added later
 }

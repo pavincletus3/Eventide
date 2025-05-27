@@ -1,31 +1,33 @@
-
-import type { Metadata } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
-import './globals.css';
-import Header from '@/components/layout/header';
-import Footer from '@/components/layout/footer';
+import type { Metadata, Viewport } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+import "./globals.css";
+import Header from "@/components/layout/header";
+import Footer from "@/components/layout/footer";
 import { Toaster } from "@/components/ui/toaster";
-import { AuthProvider } from '@/contexts/AuthContext';
+import { AuthProvider } from "@/contexts/AuthContext";
 
 const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
 });
 
 const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
-  subsets: ['latin'],
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
-  title: 'Eventide',
-  description: 'Your Premier Event Management Platform',
-  manifest: '/manifest.json',
-  themeColor: '#64B5F6',
+  title: "Eventide",
+  description: "Your Premier Event Management Platform",
+  manifest: "/manifest.json",
   icons: {
-    icon: '/icons/icon-192x192.png', // General purpose icon / favicon
-    apple: '/icons/icon-192x192.png', // For apple-touch-icon
+    icon: "/icons/icon-192x192.png", // General purpose icon / favicon
+    apple: "/icons/icon-192x192.png", // For apple-touch-icon
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#64B5F6",
 };
 
 export default function RootLayout({
@@ -35,7 +37,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+      >
         <AuthProvider>
           <div className="flex flex-col min-h-screen">
             <Header />

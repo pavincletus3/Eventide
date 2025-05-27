@@ -23,6 +23,17 @@ service firebase.storage {
       allow write: if request.auth != null;
     }
 
+    // Rules for event brochures
+    // Path: /event-brochures/{anyFileId} (e.g., /event-brochures/eventId/brochure.pdf)
+    match /event-brochures/{allPaths=**} {
+      // Authenticated users can read event brochures
+      allow read: if request.auth != null;
+
+      // Any authenticated user can write (upload/update/delete) event brochures
+      // The UI and Firestore rules for event creation will handle role-based restrictions
+      allow write: if request.auth != null;
+    }
+
     // Default deny all other paths if not explicitly allowed.
     // This rule must be the last one in this scope to act as a catch-all.
     match /{path=**} {

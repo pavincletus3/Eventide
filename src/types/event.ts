@@ -1,7 +1,6 @@
+import type { Timestamp } from "firebase/firestore";
 
-import type { Timestamp } from 'firebase/firestore';
-
-export type EventStatus = 'draft' | 'published' | 'archived' | 'completed';
+export type EventStatus = "draft" | "published" | "archived" | "completed";
 
 export interface Event {
   id?: string; // Firestore document ID, will be added client-side if needed after fetch
@@ -11,6 +10,7 @@ export interface Event {
   venue: string;
   maxParticipants: number;
   imageUrl?: string | null; // URL from Firebase Storage, or path
+  brochureUrl?: string | null; // URL from Firebase Storage for the event brochure
   organizerId: string; // User UID of the creator
   status: EventStatus;
   createdAt: Timestamp;
